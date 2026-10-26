@@ -36,3 +36,4 @@ Tokens live in `localStorage`. `src/lib/api.ts` adds the bearer token, refreshes
 1. Build with the production API: `VITE_API_URL=https://<production-api> pnpm build`.
 2. Host `dist/` as a static site at `https://admin.thebuildernetwork.com`, with an SPA fallback that serves `index.html` for unknown paths.
 3. On the server, add `https://admin.thebuildernetwork.com` to `ADMIN_URL` so CORS allows the admin origin.
+# TBN-Admin-Web
