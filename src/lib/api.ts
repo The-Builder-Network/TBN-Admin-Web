@@ -92,10 +92,11 @@ function refresh(): Promise<boolean> {
 
 type Query = Record<string, string | number | undefined | null>;
 
-export async function api<T>(
+/** Authenticated request with one refresh-and-retry on 401; throws ApiError on failure. */
+async function request(
   path: string,
   opts: { method?: string; body?: unknown; query?: Query } = {},
-): Promise<T> {
+): Promise<Response> {
   const url = new URL(`${API_URL}/api/v1${path}`);
   for (const [k, v] of Object.entries(opts.query ?? {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
@@ -119,8 +120,20 @@ export async function api<T>(
     }
   }
   if (!res.ok) throw await errorFrom(res);
-  const text = await res.text();
+  return res;
+}
+
+export async function api<T>(
+  path: string,
+  opts: { method?: string; body?: unknown; query?: Query } = {},
+): Promise<T> {
+  const text = await (await request(path, opts)).text();
   return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/** Download a protected file (e.g. an ID document) as a Blob. */
+export async function apiBlob(path: string): Promise<Blob> {
+  return (await request(path)).blob();
 }
 
 export async function login(email: string, password: string) {
