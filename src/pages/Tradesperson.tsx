@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Ban, Check, ExternalLink, FileText, HelpCircle, Loader2, RefreshCw, RotateCcw, X } from "lucide-react";
+import { ArrowLeft, Ban, Check, Download, ExternalLink, FileText, HelpCircle, Loader2, RefreshCw, RotateCcw, X } from "lucide-react";
 import { ActionButton, Async, Details, Field, Pager, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api } from "@/lib/api";
+import { api, apiBlob, ApiError, errMsg } from "@/lib/api";
 import { fmtDate, fmtDateTime, humanize } from "@/lib/format";
 import { useAction } from "@/lib/hooks";
 import type { CreditTx, Paged, TradespersonDetail } from "@/lib/types";
@@ -20,7 +20,6 @@ export default function Tradesperson() {
   const q = useQuery({
     queryKey: ["tradesperson", userId],
     queryFn: () => api<TradespersonDetail>(`/admin/tradespeople/${userId}`),
-    staleTime: 0, // presigned ID URLs expire after 5 minutes
   });
 
   return (
@@ -28,12 +27,12 @@ export default function Tradesperson() {
       <Link to="/verifications" className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> Verification queue
       </Link>
-      <Async q={q}>{(d) => <Detail d={d} fetchedAt={q.dataUpdatedAt} refetching={q.isFetching} refetch={() => q.refetch()} />}</Async>
+      <Async q={q}>{(d) => <Detail d={d} />}</Async>
     </>
   );
 }
 
-function Detail({ d, fetchedAt, refetching, refetch }: { d: TradespersonDetail; fetchedAt: number; refetching: boolean; refetch: () => void }) {
+function Detail({ d }: { d: TradespersonDetail }) {
   const { user, profile } = d;
   const id = user.id;
   const vs = profile.verificationStatus;
@@ -154,7 +153,7 @@ function Detail({ d, fetchedAt, refetching, refetch }: { d: TradespersonDetail; 
             </CardContent>
           </Card>
 
-          <IdDocument profile={profile} fetchedAt={fetchedAt} refetching={refetching} refetch={refetch} />
+          <IdDocument userId={id} profile={profile} />
 
           <Card>
             <CardHeader>
@@ -307,61 +306,83 @@ function Detail({ d, fetchedAt, refetching, refetch }: { d: TradespersonDetail; 
   );
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp)$/i;
+/**
+ * The API streams the private file to us (no expiring links); we show it inline
+ * from a local object URL that is revoked when the page changes.
+ */
+function IdDocument({ userId, profile }: { userId: string; profile: TradespersonDetail["profile"] }) {
+  const doc = useQuery({
+    queryKey: ["id-document", userId, profile.idDocumentUploadedAt],
+    queryFn: () => apiBlob(`/admin/tradespeople/${userId}/id-document`),
+    enabled: profile.hasIdDocument,
+    retry: (count, err) => count < 1 && !(err instanceof ApiError && err.status < 500),
+    staleTime: Infinity,
+  });
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!doc.data) return;
+    const u = URL.createObjectURL(doc.data);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [doc.data]);
 
-function IdDocument({
-  profile,
-  fetchedAt,
-  refetching,
-  refetch,
-}: {
-  profile: TradespersonDetail["profile"];
-  fetchedAt: number;
-  refetching: boolean;
-  refetch: () => void;
-}) {
-  const [broken, setBroken] = useState<string | null>(null);
-  const url = profile.idDocumentUrl;
-  let path = "";
-  try {
-    path = url ? new URL(url).pathname : "";
-  } catch {
-    /* relative or malformed URL */
-  }
-  const isImage = IMAGE_EXT.test(profile.idDocumentName ?? "") || IMAGE_EXT.test(path);
-  const expiresAt = profile.idDocumentUrlExpiresInSeconds ? new Date(fetchedAt + profile.idDocumentUrlExpiresInSeconds * 1000) : null;
+  const type = doc.data?.type ?? "";
+  const name = profile.idDocumentName ?? "id-document";
+  const storageDown = doc.error instanceof ApiError && doc.error.status === 503;
 
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
         <CardTitle className="text-lg">ID document</CardTitle>
         {url && (
-          <Button variant="outline" size="sm" onClick={() => { setBroken(null); refetch(); }} disabled={refetching}>
-            {refetching ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh link
-          </Button>
+          <div className="flex gap-2">
+            <Button asChild variant="outline" size="sm">
+              <a href={url} target="_blank" rel="noreferrer">
+                <ExternalLink /> Open
+              </a>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <a href={url} download={name}>
+                <Download /> Download
+              </a>
+            </Button>
+          </div>
         )}
       </CardHeader>
       <CardContent className="space-y-3">
-        {!url ? (
+        {!profile.hasIdDocument ? (
           <p className="text-sm text-muted-foreground">No ID document uploaded.</p>
         ) : (
           <>
             <p className="text-xs text-muted-foreground">
-              {profile.idDocumentName ?? "Document"} · uploaded {fmtDate(profile.idDocumentUploadedAt)}
-              {expiresAt && ` · link valid until ${expiresAt.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`}
+              {name} · uploaded {fmtDate(profile.idDocumentUploadedAt)}
             </p>
-            {isImage && broken !== url ? (
-              <a href={url} target="_blank" rel="noreferrer" className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                <img src={url} alt="Uploaded ID document" onError={() => setBroken(url)} className="max-h-[480px] w-auto rounded-md border object-contain" />
-              </a>
+            {doc.isPending ? (
+              <div className="flex h-40 items-center justify-center rounded-md border text-sm text-muted-foreground" aria-busy="true">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading document…
+              </div>
+            ) : doc.isError ? (
+              <div role="alert" className="space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">
+                <p className="font-medium text-destructive">
+                  {storageDown ? "File storage is refusing access" : "Couldn't load the document"}
+                </p>
+                <p>{errMsg(doc.error)}</p>
+                {storageDown && (
+                  <p className="text-muted-foreground">
+                    This affects every upload on the site, not just this document. It's fixed in AWS, not here.
+                  </p>
+                )}
+                <Button size="sm" variant="outline" onClick={() => void doc.refetch()} disabled={doc.isFetching}>
+                  {doc.isFetching ? <Loader2 className="animate-spin" /> : <RefreshCw />} Try again
+                </Button>
+              </div>
+            ) : url && type.startsWith("image/") ? (
+              <img src={url} alt={`ID document: ${name}`} className="max-h-[560px] w-auto rounded-md border object-contain" />
+            ) : url && type === "application/pdf" ? (
+              <iframe src={url} title={`ID document: ${name}`} className="h-[560px] w-full rounded-md border" />
             ) : (
-              broken === url && <p className="text-sm text-destructive">The preview didn't load. The link may have expired; refresh it.</p>
+              <p className="text-sm text-muted-foreground">This file type can't be previewed. Use Open or Download.</p>
             )}
-            <Button asChild variant="outline" size="sm">
-              <a href={url} target="_blank" rel="noreferrer">
-                <ExternalLink /> Open document
-              </a>
-            </Button>
           </>
         )}
       </CardContent>

@@ -85,10 +85,10 @@ export interface TradespersonDetail {
     trade: string | null;
     postcode: string | null;
     workRadiusMiles: number;
-    idDocumentUrl: string | null;
     idDocumentName: string | null;
     idDocumentUploadedAt: string | null;
-    idDocumentUrlExpiresInSeconds: number | null;
+    /** Fetch the file from /admin/tradespeople/:userId/id-document. */
+    hasIdDocument: boolean;
     verificationStatus: VerificationStatus;
     verificationNote: string | null;
     submittedAt: string | null;
